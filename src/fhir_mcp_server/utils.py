@@ -26,6 +26,85 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 logger: logging.Logger = logging.getLogger(__name__)
 
 
+def _build_field_tree(paths: List[str]) -> Dict[str, Any]:
+    """
+    Convert dot-notation paths into a nested dict that mirrors the shape to extract.
+    ["address.city", "address.postalCode"] becomes {"address": {"city": None, "postalCode": None}}.
+    None marks a leaf: copy the full value at that key without going deeper.
+    """
+    tree: Dict[str, Any] = {}
+    for path in paths:
+        parts = path.split(".")
+        node = tree
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = None  # None = leaf, copy the full value as-is
+    return tree
+
+
+def _filter_by_tree(obj: Any, tree: Dict[str, Any]) -> Any:
+    """
+    Walk obj against tree and return only the matching fields.
+    When a value is a list (e.g. name, address in FHIR) the same tree
+    is applied to each item in it, so dot-paths work the same either way.
+    """
+    if isinstance(obj, list):
+        return [_filter_by_tree(i, tree) for i in obj if isinstance(i, dict)]
+    if not isinstance(obj, dict):
+        return obj
+    out: Dict[str, Any] = {}
+    for key, sub in tree.items():
+        val = obj.get(key)
+        if val is None:
+            continue
+        out[key] = val if sub is None else _filter_by_tree(val, sub)
+    return out
+
+
+def filter_resource(
+    resource: Dict[str, Any],
+    fields: Dict[str, List[str]],
+    preserve: List[str] = ["resourceType", "id"],
+) -> Dict[str, Any]:
+    """
+    Return a filtered copy of resource, keeping only the paths in fields.
+    Looks up paths by resourceType first, then merges in any '*' wildcard paths.
+    Fields in preserve are always kept regardless of the paths list.
+    Skips filtering entirely if no matching paths are found.
+    """
+    if not fields:
+        return resource
+    resource_type = resource.get("resourceType", "")
+    paths = list(dict.fromkeys(fields.get(resource_type, []) + fields.get("*", []) + preserve))
+    if not paths:
+        return resource
+    return _filter_by_tree(resource, _build_field_tree(paths))
+
+
+def filter_bundle(
+    bundle: Dict[str, Any], fields: Dict[str, List[str]]
+) -> Dict[str, Any]:
+    """Apply filter_resource to every resource in a FHIR Bundle's entry list."""
+    if not fields or "entry" not in bundle:
+        return bundle
+    entries = []
+    for entry in bundle["entry"]:
+        resource = entry.get("resource")
+        if resource is not None:
+            entry = {**entry, "resource": filter_resource(resource, fields)}
+        entries.append(entry)
+    return {**bundle, "entry": entries}
+
+
+def filter_response(data: Any, fields: Dict[str, List[str]]) -> Any:
+    """Route to filter_bundle or filter_resource depending on what the FHIR server returned."""
+    if not fields or not isinstance(data, dict):
+        return data
+    if data.get("resourceType") == "Bundle":
+        return filter_bundle(data, fields)
+    return filter_resource(data, fields)
+
+
 async def create_async_fhir_client(
     config: ServerConfigs,
     access_token: str | None = None,

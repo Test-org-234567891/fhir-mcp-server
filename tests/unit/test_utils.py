@@ -21,6 +21,9 @@ from typing import Dict, Any
 
 from fhir_mcp_server.utils import (
     create_async_fhir_client,
+    filter_bundle,
+    filter_resource,
+    filter_response,
     get_bundle_entries,
     trim_resource_capabilities,
     get_operation_outcome_exception,
@@ -28,6 +31,7 @@ from fhir_mcp_server.utils import (
     get_operation_outcome,
     get_capability_statement,
     get_default_headers,
+    _build_field_tree,
 )
 from fhir_mcp_server.oauth.types import ServerConfigs
 
@@ -324,13 +328,128 @@ class TestGetDefaultHeaders:
         """Test that default headers are not shared between calls."""
         headers1 = get_default_headers()
         headers2 = get_default_headers()
-        
+
         # Modify one set of headers
         headers1["X-Custom"] = "value"
-        
+
         # Ensure the other set is not affected
         assert "X-Custom" not in headers2
         assert headers2 == {
             "Accept": "application/fhir+json",
             "Content-Type": "application/fhir+json"
         }
+
+
+class TestFilterFunctions:
+    """Test field filtering utilities."""
+
+    PATIENT = {
+        "resourceType": "Patient",
+        "id": "123",
+        "name": [{"family": "Smith", "given": ["John"]}],
+        "birthDate": "1980-01-01",
+        "address": [{"city": "Boston", "postalCode": "02101", "use": "home"}],
+        "gender": "male",
+    }
+
+    BUNDLE = {
+        "resourceType": "Bundle",
+        "total": 1,
+        "entry": [
+            {"resource": PATIENT},
+            {"fullUrl": "http://example.com/Patient/123"},  # no resource key
+        ],
+    }
+
+    # _build_field_tree
+
+    def test_build_field_tree_single_path(self):
+        assert _build_field_tree(["birthDate"]) == {"birthDate": None}
+
+    def test_build_field_tree_nested_path(self):
+        assert _build_field_tree(["name.family"]) == {"name": {"family": None}}
+
+    def test_build_field_tree_sibling_merge(self):
+        """Sibling paths sharing a prefix must be merged into one branch."""
+        result = _build_field_tree(["address.city", "address.postalCode"])
+        assert result == {"address": {"city": None, "postalCode": None}}
+
+    def test_build_field_tree_deep_path(self):
+        assert _build_field_tree(["code.coding.display"]) == {
+            "code": {"coding": {"display": None}}
+        }
+
+    # filter_resource
+
+    def test_filter_resource_no_fields_returns_original(self):
+        assert filter_resource(self.PATIENT, {}) is self.PATIENT
+
+    def test_filter_resource_no_matching_type_returns_original(self):
+        assert filter_resource(self.PATIENT, {"Observation": ["code"]}) is self.PATIENT
+
+    def test_filter_resource_scalar_field(self):
+        result = filter_resource(self.PATIENT, {"Patient": ["birthDate"]})
+        assert result == {"resourceType": "Patient", "id": "123", "birthDate": "1980-01-01"}
+
+    def test_filter_resource_nested_field(self):
+        result = filter_resource(self.PATIENT, {"Patient": ["name.family"]})
+        assert result["name"] == [{"family": "Smith"}]
+
+    def test_filter_resource_sibling_fields(self):
+        result = filter_resource(self.PATIENT, {"Patient": ["address.city", "address.postalCode"]})
+        assert result["address"] == [{"city": "Boston", "postalCode": "02101"}]
+
+    def test_filter_resource_wildcard(self):
+        result = filter_resource(self.PATIENT, {"*": ["birthDate"]})
+        assert "birthDate" in result
+        assert "gender" not in result
+
+    def test_filter_resource_type_and_wildcard_merged(self):
+        result = filter_resource(self.PATIENT, {"Patient": ["birthDate"], "*": ["gender"]})
+        assert "birthDate" in result
+        assert "gender" in result
+        assert "name" not in result
+
+    def test_filter_resource_always_injects_mandatory_fields(self):
+        result = filter_resource(self.PATIENT, {"Patient": ["birthDate"]})
+        assert result["resourceType"] == "Patient"
+        assert result["id"] == "123"
+
+    # filter_bundle
+
+    def test_filter_bundle_no_fields_returns_original(self):
+        assert filter_bundle(self.BUNDLE, {}) is self.BUNDLE
+
+    def test_filter_bundle_filters_each_resource(self):
+        result = filter_bundle(self.BUNDLE, {"Patient": ["birthDate"]})
+        resource = result["entry"][0]["resource"]
+        assert "birthDate" in resource
+        assert "gender" not in resource
+
+    def test_filter_bundle_skips_entries_without_resource(self):
+        result = filter_bundle(self.BUNDLE, {"Patient": ["birthDate"]})
+        assert result["entry"][1] == {"fullUrl": "http://example.com/Patient/123"}
+
+    def test_filter_bundle_preserves_bundle_metadata(self):
+        result = filter_bundle(self.BUNDLE, {"Patient": ["birthDate"]})
+        assert result["resourceType"] == "Bundle"
+        assert result["total"] == 1
+
+    # filter_response
+
+    def test_filter_response_routes_bundle(self):
+        result = filter_response(self.BUNDLE, {"Patient": ["birthDate"]})
+        assert result["resourceType"] == "Bundle"
+        assert "gender" not in result["entry"][0]["resource"]
+
+    def test_filter_response_routes_single_resource(self):
+        result = filter_response(self.PATIENT, {"Patient": ["birthDate"]})
+        assert "birthDate" in result
+        assert "gender" not in result
+
+    def test_filter_response_no_fields_returns_original(self):
+        assert filter_response(self.PATIENT, {}) is self.PATIENT
+
+    def test_filter_response_non_dict_returns_original(self):
+        data = ["not", "a", "resource"]
+        assert filter_response(data, {"Patient": ["birthDate"]}) is data

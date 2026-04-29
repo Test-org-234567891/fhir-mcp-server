@@ -20,6 +20,7 @@ import logging
 from fhir_mcp_server.utils import (
     build_user_profile,
     create_async_fhir_client,
+    filter_response,
     get_bundle_entries,
     get_default_headers,
     get_operation_outcome,
@@ -271,6 +272,26 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 ],
             ),
         ],
+        fields: Annotated[
+            Dict[str, List[str]],
+            Field(
+                description=(
+                    "Subset of fields to return, keyed by resourceType, with each value a list of "
+                    "dot-paths into that type. Use '*' to apply paths to every resourceType in the "
+                    "response — useful when _include/_revinclude pulls in other types. "
+                    "'resourceType' and 'id' are always included. "
+                    "Include this parameter to retrieve results filtered to specific fields, reducing response size; "
+                    "if omitted, the full resource(s) are returned."
+                    "For example, a visit summary may only patient ID, encounter status, active conditions,"
+                    "and current meds — filtering to just those fields skips meta, text, and extensions for ~70% token reduction."
+                ),
+                examples=[
+                    '{"Patient": ["name.family", "birthDate", "address.city"]}',
+                    '{"Patient": ["name.family", "birthDate"], "Observation": ["code.text"], "*": ["status"]}',
+                    '{"Patient": ["name", "birthDate", "gender"], "Encounter": ["status", "period", "reasonCode"], "Condition": ["code", "clinicalStatus"], "MedicationStatement": ["medicationCodeableConcept", "dosage"]}',
+                ],
+            ),
+        ] = {},
     ) -> Annotated[
         list[Dict[str, Any]] | Dict[str, Any],
         Field(
@@ -289,8 +310,8 @@ def register_mcp_tools(mcp: FastMCP) -> None:
             async_resources: list[Any] = (
                 await client.resources(type).search(Raw(**searchParam)).fetch_raw()
             )
-            logger.debug("Async resources fetched:", async_resources) 
-            return async_resources
+            logger.debug("Async resources fetched:", async_resources)
+            return filter_response(async_resources, fields)
         except ValueError as ex:
             logger.exception(
                 f"User does not have permission to perform FHIR '{type}' resource search operation. Caused by, ",
@@ -354,6 +375,26 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 examples=["$everything"],
             ),
         ] = "",
+        fields: Annotated[
+            Dict[str, List[str]],
+            Field(
+                description=(
+                    "Subset of fields to return, keyed by resourceType, with each value a list of "
+                    "dot-paths into that type. Use '*' to apply paths to every resourceType in the "
+                    "response — useful when $everything or other operations return multiple types. "
+                    "'resourceType' and 'id' are always included. "
+                    "Include this parameter to retrieve results filtered to specific fields, reducing token usage; "
+                    "if omitted, the full resource(s) are returned."
+                    "For example, a visit summary may only patient ID, encounter status, active conditions,"
+                    "and current meds — filtering to just those fields skips meta, text, and extensions for ~70% token reduction."
+                ),
+                examples=[
+                    '{"Patient": ["name.family", "birthDate", "address.city"]}',
+                    '{"Patient": ["name.family", "birthDate"], "Observation": ["code.coding.display", "valueQuantity.value", "effectiveDateTime"]}',
+                    '{"Patient": ["name", "birthDate", "gender"], "Encounter": ["status", "period", "reasonCode"], "Condition": ["code", "clinicalStatus"], "MedicationStatement": ["medicationCodeableConcept", "dosage"]}',
+                ],
+            ),
+        ] = {},
     ) -> Annotated[
         Dict[str, Any],
         Field(
@@ -375,7 +416,7 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 operation=operation or "", method="GET", params=searchParam
             )
 
-            return await get_bundle_entries(bundle=bundle)
+            return await get_bundle_entries(bundle=filter_response(bundle, fields))
         except ResourceNotFound as ex:
             logger.error(
                 f"Resource of type '{type}' with id '{id}' not found. Caused by, ",
