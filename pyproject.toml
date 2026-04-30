@@ -16,6 +16,7 @@ dependencies = [
   "aiohttp==3.12.13",
   "fhirpy==2.0.15",
   "fhirpathpy>=2.2.0",
+  "toon-format",
 ]
 description = "A Model Context Protocol (MCP) server that provides seamless, standardized access to Fast Healthcare Interoperability Resources (FHIR) data from any compatible FHIR server. Designed for easy integration with AI tools, developer workflows, and healthcare applications, it enables natural language and programmatic search, retrieval, and analysis of clinical data."
 keywords = [
@@ -47,6 +48,9 @@ fhir-mcp-server = "fhir_mcp_server.server:main"
 name = "pypi"
 publish-url = "https://upload.pypi.org/legacy/"
 url = "https://pypi.org/simple/"
+
+[tool.uv.sources]
+toon-format = { git = "https://github.com/toon-format/toon-python.git" }
 
 [project.optional-dependencies]
 dev = [

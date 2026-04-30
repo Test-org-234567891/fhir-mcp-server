@@ -18,6 +18,7 @@ import aiohttp
 import logging
 
 from fhir_mcp_server.oauth import ServerConfigs
+from toon_format import encode as toon_encode
 
 from typing import Any, Dict, List, Optional
 from fhirpy import AsyncFHIRClient
@@ -60,6 +61,13 @@ def _filter_by_tree(obj: Any, tree: Dict[str, Any]) -> Any:
             continue
         out[key] = val if sub is None else _filter_by_tree(val, sub)
     return out
+
+
+def format_output(data: Any, fmt: str) -> Any:
+    """Return TOON-encoded text for 'toon' format, or raw data for 'json'."""
+    if fmt == "json":
+        return data
+    return toon_encode(data)
 
 
 def filter_resource(

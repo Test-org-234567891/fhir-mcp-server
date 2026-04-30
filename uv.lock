@@ -231,6 +231,7 @@ dependencies = [
     { name = "fhirpathpy" },
     { name = "fhirpy" },
     { name = "mcp", extra = ["cli"] },
+    { name = "toon-format" },
 ]
 
 [package.optional-dependencies]
@@ -257,6 +258,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'test'", specifier = "==1.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==6.2.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = "==6.2.0" },
+    { name = "toon-format", git = "https://github.com/toon-format/toon-python.git" },
 ]
 provides-extras = ["dev", "test"]
 
@@ -836,6 +838,11 @@ sdist = { url = "https://files.pythonhosted.org/packages/ce/20/08dfcd9c983f6a6f4
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/0c/9d30a4ebeb6db2b25a841afbb80f6ef9a854fc3b41be131d249a977b4959/starlette-0.46.2-py3-none-any.whl", hash = "sha256:595633ce89f8ffa71a015caed34a5b2dc1c0cdb3f0f1fbd1e69339cf2abeec35", size = 72037, upload-time = "2025-04-13T13:56:16.21Z" },
 ]
+
+[[package]]
+name = "toon-format"
+version = "0.9.0b1"
+source = { git = "https://github.com/toon-format/toon-python.git#90861444e5bf7d6408e91bd95e58dba41dd99be8" }
 
 [[package]]
 name = "typer"
