@@ -21,6 +21,7 @@ from fhir_mcp_server.utils import (
     build_user_profile,
     create_async_fhir_client,
     filter_response,
+    fhirpath_filter_response,
     get_bundle_entries,
     get_default_headers,
     get_operation_outcome,
@@ -292,6 +293,16 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 ],
             ),
         ] = {},
+        use_fhirpath: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, fields are evaluated as FHIRPath expressions (e.g. telecom.where(system='email')), "
+                    "enabling predicate filtering. When false (default), fields are simple dot-paths and the "
+                    "original resource structure is preserved."
+                ),
+            ),
+        ] = False,
     ) -> Annotated[
         list[Dict[str, Any]] | Dict[str, Any],
         Field(
@@ -311,7 +322,8 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 await client.resources(type).search(Raw(**searchParam)).fetch_raw()
             )
             logger.debug("Async resources fetched:", async_resources)
-            return filter_response(async_resources, fields)
+            _filter = fhirpath_filter_response if use_fhirpath else filter_response
+            return _filter(async_resources, fields)
         except ValueError as ex:
             logger.exception(
                 f"User does not have permission to perform FHIR '{type}' resource search operation. Caused by, ",
@@ -395,6 +407,16 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 ],
             ),
         ] = {},
+        use_fhirpath: Annotated[
+            bool,
+            Field(
+                description=(
+                    "When true, fields are evaluated as FHIRPath expressions (e.g. telecom.where(system='email')), "
+                    "enabling predicate filtering. When false (default), fields are simple dot-paths and the "
+                    "original resource structure is preserved."
+                ),
+            ),
+        ] = False,
     ) -> Annotated[
         Dict[str, Any],
         Field(
@@ -416,7 +438,8 @@ def register_mcp_tools(mcp: FastMCP) -> None:
                 operation=operation or "", method="GET", params=searchParam
             )
 
-            return await get_bundle_entries(bundle=filter_response(bundle, fields))
+            _filter = fhirpath_filter_response if use_fhirpath else filter_response
+            return await get_bundle_entries(bundle=_filter(bundle, fields))
         except ResourceNotFound as ex:
             logger.error(
                 f"Resource of type '{type}' with id '{id}' not found. Caused by, ",

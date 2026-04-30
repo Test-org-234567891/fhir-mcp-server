@@ -24,6 +24,8 @@ from fhir_mcp_server.utils import (
     filter_bundle,
     filter_resource,
     filter_response,
+    fhirpath_filter_resource,
+    fhirpath_filter_response,
     get_bundle_entries,
     trim_resource_capabilities,
     get_operation_outcome_exception,
@@ -453,3 +455,116 @@ class TestFilterFunctions:
     def test_filter_response_non_dict_returns_original(self):
         data = ["not", "a", "resource"]
         assert filter_response(data, {"Patient": ["birthDate"]}) is data
+
+
+class TestFhirpathFilterFunctions:
+    """Test FHIRPath-based field filtering utilities."""
+
+    PATIENT = {
+        "resourceType": "Patient",
+        "id": "123",
+        "birthDate": "1980-01-01",
+        "gender": "male",
+        "name": [
+            {"use": "official", "family": "Smith", "given": ["John", "James"]},
+            {"use": "nickname", "family": "Smith", "given": ["Johnny"]},
+        ],
+        "telecom": [
+            {"system": "phone", "value": "555-1234", "use": "home"},
+            {"system": "email", "value": "john@example.com", "use": "work"},
+        ],
+        "address": [
+            {"use": "home", "city": "Boston", "postalCode": "02101"},
+            {"use": "work", "city": "Cambridge", "postalCode": "02139"},
+        ],
+    }
+
+    BUNDLE = {
+        "resourceType": "Bundle",
+        "total": 1,
+        "entry": [{"resource": PATIENT}],
+    }
+
+    # simple field extraction
+
+    def test_simple_field(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["birthDate"]})
+        assert result["birthDate"] == "1980-01-01"
+
+    def test_multiple_simple_fields(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["birthDate", "gender"]})
+        assert result["birthDate"] == "1980-01-01"
+        assert result["gender"] == "male"
+
+    def test_mandatory_fields_always_present(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["birthDate"]})
+        assert result["resourceType"] == "Patient"
+        assert result["id"] == "123"
+
+    def test_no_matching_type_returns_original(self):
+        assert fhirpath_filter_resource(self.PATIENT, {"Observation": ["code"]}) is self.PATIENT
+
+    def test_no_fields_returns_original(self):
+        assert fhirpath_filter_resource(self.PATIENT, {}) is self.PATIENT
+
+    # array field extraction
+
+    def test_array_field_returns_all_items(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["name"]})
+        assert len(result["name"]) == 2
+
+    # complex FHIRPath expressions
+
+    def test_where_filter_on_system(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["telecom.where(system='email')"]})
+        values = result["telecom.where(system='email')"]
+        assert isinstance(values, list)
+        assert all(t["system"] == "email" for t in values)
+        assert len(values) == 1
+        assert values[0]["value"] == "john@example.com"
+
+    def test_where_filter_on_use(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["name.where(use='official')"]})
+        values = result["name.where(use='official')"]
+        assert len(values) == 1
+        assert values[0]["family"] == "Smith"
+        assert values[0]["use"] == "official"
+
+    def test_where_filter_no_match_returns_no_key(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["telecom.where(system='fax')"]})
+        assert "telecom.where(system='fax')" not in result
+
+    def test_nested_field_extraction(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["name.family"]})
+        values = result["name.family"]
+        assert "Smith" in values
+
+    def test_where_on_address_use(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"Patient": ["address.where(use='home')"]})
+        values = result["address.where(use='home')"]
+        assert len(values) == 1
+        assert values[0]["city"] == "Boston"
+
+    def test_wildcard_applies_to_any_type(self):
+        result = fhirpath_filter_resource(self.PATIENT, {"*": ["birthDate"]})
+        assert "birthDate" in result
+        assert "gender" not in result
+
+    # fhirpath_filter_response routing
+
+    def test_filter_response_routes_to_bundle(self):
+        result = fhirpath_filter_response(self.BUNDLE, {"Patient": ["birthDate"]})
+        assert result["resourceType"] == "Bundle"
+        resource = result["entry"][0]["resource"]
+        assert "birthDate" in resource
+
+    def test_filter_response_routes_to_resource(self):
+        result = fhirpath_filter_response(self.PATIENT, {"Patient": ["gender"]})
+        assert "gender" in result
+
+    def test_filter_response_no_fields_returns_original(self):
+        assert fhirpath_filter_response(self.PATIENT, {}) is self.PATIENT
+
+    def test_filter_response_non_dict_returns_original(self):
+        data = ["not", "a", "resource"]
+        assert fhirpath_filter_response(data, {"Patient": ["birthDate"]}) is data

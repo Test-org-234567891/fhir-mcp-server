@@ -15,6 +15,7 @@ dependencies = [
   "mcp[cli]==1.9.1",
   "aiohttp==3.12.13",
   "fhirpy==2.0.15",
+  "fhirpathpy>=2.2.0",
 ]
 description = "A Model Context Protocol (MCP) server that provides seamless, standardized access to Fast Healthcare Interoperability Resources (FHIR) data from any compatible FHIR server. Designed for easy integration with AI tools, developer workflows, and healthcare applications, it enables natural language and programmatic search, retrieval, and analysis of clinical data."
 keywords = [

@@ -21,6 +21,7 @@ from fhir_mcp_server.oauth import ServerConfigs
 
 from typing import Any, Dict, List, Optional
 from fhirpy import AsyncFHIRClient
+from fhirpathpy import compile as fhircompile
 from mcp.shared._httpx_utils import create_mcp_http_client
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -64,20 +65,21 @@ def _filter_by_tree(obj: Any, tree: Dict[str, Any]) -> Any:
 def filter_resource(
     resource: Dict[str, Any],
     fields: Dict[str, List[str]],
-    preserve: List[str] = ["resourceType", "id"],
+    mandatory_fields: List[str] = ["resourceType", "id"],
 ) -> Dict[str, Any]:
     """
     Return a filtered copy of resource, keeping only the paths in fields.
     Looks up paths by resourceType first, then merges in any '*' wildcard paths.
-    Fields in preserve are always kept regardless of the paths list.
+    mandatory_fields are always kept regardless of the paths list.
     Skips filtering entirely if no matching paths are found.
     """
     if not fields:
         return resource
     resource_type = resource.get("resourceType", "")
-    paths = list(dict.fromkeys(fields.get(resource_type, []) + fields.get("*", []) + preserve))
-    if not paths:
+    requested_paths = fields.get(resource_type, []) + fields.get("*", [])
+    if not requested_paths:
         return resource
+    paths = list(dict.fromkeys(requested_paths + mandatory_fields))
     return _filter_by_tree(resource, _build_field_tree(paths))
 
 
@@ -103,6 +105,65 @@ def filter_response(data: Any, fields: Dict[str, List[str]]) -> Any:
     if data.get("resourceType") == "Bundle":
         return filter_bundle(data, fields)
     return filter_resource(data, fields)
+
+
+def fhirpath_filter_resource(
+    resource: Dict[str, Any],
+    fields: Dict[str, List[str]],
+    preserve: List[str] = ["resourceType", "id"],
+) -> Dict[str, Any]:
+    """
+    Filter a FHIR resource using FHIRPath expressions via fhirpathpy.
+    fields is keyed by resourceType (or '*' for all types), with FHIRPath expressions
+    relative to the resource type, e.g. ["name", "telecom.where(system='email')"].
+    Returns a flat dict keyed by expression; does not reconstruct the original shape.
+    """
+    if not fields:
+        return resource
+    resource_type = resource.get("resourceType", "")
+    paths = list(dict.fromkeys(fields.get(resource_type, []) + fields.get("*", [])))
+    if not paths:
+        return resource
+
+    result: Dict[str, Any] = {}
+    for field in preserve:
+        val = resource.get(field)
+        if val is not None:
+            result[field] = val
+
+    for expr in paths:
+        if expr in preserve:
+            continue
+        path = expr if expr.startswith(resource_type) else f"{resource_type}.{expr}"
+        values = fhircompile(path)(resource)
+        if values:
+            result[expr] = values[0] if len(values) == 1 else values
+
+    return result
+
+
+def fhirpath_filter_bundle(
+    bundle: Dict[str, Any], fields: Dict[str, List[str]]
+) -> Dict[str, Any]:
+    """Apply fhirpath_filter_resource to every resource in a FHIR Bundle's entry list."""
+    if not fields or "entry" not in bundle:
+        return bundle
+    entries = []
+    for entry in bundle["entry"]:
+        resource = entry.get("resource")
+        if resource is not None:
+            entry = {**entry, "resource": fhirpath_filter_resource(resource, fields)}
+        entries.append(entry)
+    return {**bundle, "entry": entries}
+
+
+def fhirpath_filter_response(data: Any, fields: Dict[str, List[str]]) -> Any:
+    """Route to fhirpath_filter_bundle or fhirpath_filter_resource depending on what the FHIR server returned."""
+    if not fields or not isinstance(data, dict):
+        return data
+    if data.get("resourceType") == "Bundle":
+        return fhirpath_filter_bundle(data, fields)
+    return fhirpath_filter_resource(data, fields)
 
 
 async def create_async_fhir_client(
